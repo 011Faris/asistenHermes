@@ -22,6 +22,10 @@ function extractApiKey(req: Request): string | undefined {
  */
 export function authMiddleware(req: Request, _res: Response, next: NextFunction): void {
   if (PUBLIC_PATHS.has(req.path) || PUBLIC_PATHS.has(fullPath(req))) return next();
+  // Pengecualian sempit: prefix /api/instabox/* memakai autentikasi khusus
+  // lingkup-router (master atau UI key). Route lain tidak terpengaruh.
+  const full = fullPath(req);
+  if (full === '/api/instabox' || full.startsWith('/api/instabox/')) return next();
   let expected: string;
   try {
     expected = getEnv().ASSISTANT_API_KEY;
