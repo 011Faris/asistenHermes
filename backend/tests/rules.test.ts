@@ -87,6 +87,7 @@ describe('aturan bisnis (mock Supabase)', () => {
     const res = await request(createApp())
       .post('/api/transactions/transfer')
       .set(headers)
+      .set('Idempotency-Key', '11111111-2222-4333-8555-666666666666')
       .send({
         source_wallet_id: '00000000-0000-0000-0000-000000000001',
         destination_wallet_id: '00000000-0000-0000-0000-000000000001',
@@ -102,6 +103,7 @@ describe('aturan bisnis (mock Supabase)', () => {
     const res = await request(createApp())
       .post('/api/transactions/expense')
       .set(headers)
+      .set('Idempotency-Key', '22222222-3333-4444-8555-777777777777')
       .send({
         wallet_id: '00000000-0000-0000-0000-000000000001',
         category_id: '00000000-0000-0000-0000-000000000002',

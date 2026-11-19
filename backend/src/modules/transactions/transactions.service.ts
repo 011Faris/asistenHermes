@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { createHash } from 'node:crypto';
 import { Errors } from '../../utils/errors.js';
-import { assertCategoryType } from '../categories/categories.service.js';
-import { assertWalletUsable } from '../wallets/wallets.service.js';
 import type {
   CreateExpenseInput,
   CreateIncomeInput,
@@ -30,6 +29,49 @@ export function toApiTransaction(row: Record<string, unknown>): Record<string, u
 
 export function toApiEntry(row: Record<string, unknown>): Record<string, unknown> {
   return { ...row, amount: row.amount_signed };
+}
+
+/**
+ * Idempotensi tulis transaksi.
+ * - Kunci (`Idempotency-Key`, UUID, wajib) diterima via HTTP header dan
+ *   diteruskan apa adanya ke RPC sebagai `p_idempotency_key`.
+ * - Sidik (`p_request_hash`) = SHA-256 (modul bawaan `node:crypto`, tanpa
+ *   dependensi baru) atas payload kanonis: nilai pasca-Zod yang SAMA dengan
+ *   argumen RPC (tanggal via toIsoDate, notes null bila kosong, UUID
+ *   lowercase, description sudah di-trim oleh Zod). Urutan field disortir
+ *   agar byte-identik antar percobaan.
+ */
+function canonicalJson(canonical: Record<string, unknown>): string {
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(canonical).sort()) sorted[key] = canonical[key];
+  return JSON.stringify(sorted);
+}
+
+function hashPayload(canonical: Record<string, unknown>): string {
+  return createHash('sha256').update(canonicalJson(canonical), 'utf8').digest('hex');
+}
+
+/**
+ * Konflik idempotensi hanya dipetakan dari penanda terverifikasi definisi RPC:
+ * SQLSTATE P0001 DAN pesan persis 'Idempotency key sudah digunakan untuk
+ * permintaan berbeda'. P0001 lain, 23505, atau pesan berbeda BUKAN konflik.
+ */
+function isIdempotencyConflict(err: { code?: string; message?: string }): boolean {
+  return (
+    err.code === 'P0001' && err.message === 'Idempotency key sudah digunakan untuk permintaan berbeda'
+  );
+}
+
+function mapWriteError(err: { message: string; code?: string; details?: unknown; hint?: unknown }): never {
+  if (isIdempotencyConflict(err)) {
+    throw Errors.conflict(
+      'Idempotency-Key ini sudah dipakai untuk transaksi yang berbeda. Gunakan kunci baru untuk transaksi baru.',
+      { code: err.code },
+    );
+  }
+  // 422 (saldo tidak mencukupi) dan error DB lain tetap 502: tidak ada penanda
+  // sempit yang terverifikasi dari definisi RPC. Bukan tebakan.
+  throw Errors.upstream(`Database error: ${err.message}`, { code: err.code });
 }
 
 export async function listTransactions(db: SupabaseClient, q: ListTransactionsQuery) {
@@ -77,54 +119,96 @@ export async function getTransactionDetail(db: SupabaseClient, id: string) {
   return { ...toApiTransaction(tx as Record<string, unknown>), entries: apiEntries };
 }
 
-export async function createIncome(db: SupabaseClient, input: CreateIncomeInput) {
-  await assertWalletUsable(db, input.wallet_id, 'Dompet tujuan');
-  await assertCategoryType(db, input.category_id, 'income');
+export async function createIncome(db: SupabaseClient, input: CreateIncomeInput, idempotencyKey: string) {
+  // Tanpa pre-check dompet/kategori di sini: replay (key+payload sama) wajib
+  // lolos meski status berubah, dan validasi transaksi baru tetap dilakukan
+  // oleh RPC lama di dalam RPC idempotent. Validasi Zod tetap di routes.
   // Wajib via DB function agar jurnal selalu konsisten; jangan insert entries manual.
-  const { data, error } = await db.rpc('create_simple_transaction', {
+  // Payload ternormalisasi dipakai SAMA untuk hash dan argumen RPC.
+  const transactionDate = toIsoDate(input.transaction_date);
+  const notes = input.notes ?? null;
+  const requestHash = hashPayload({
+    type: 'income',
+    wallet_id: input.wallet_id.toLowerCase(),
+    category_id: input.category_id.toLowerCase(),
+    amount: input.amount,
+    description: input.description,
+    transaction_date: transactionDate,
+    notes,
+  });
+  const { data, error } = await db.rpc('create_simple_transaction_idempotent', {
     p_type: 'income',
     p_wallet_id: input.wallet_id,
     p_amount: input.amount,
     p_description: input.description,
     p_category_id: input.category_id,
-    p_transaction_date: toIsoDate(input.transaction_date),
-    p_notes: input.notes ?? null,
+    p_transaction_date: transactionDate,
+    p_notes: notes,
+    p_idempotency_key: idempotencyKey,
+    p_request_hash: requestHash,
   });
-  if (error) mapDbError(error);
+  if (error) mapWriteError(error);
   return data;
 }
 
-export async function createExpense(db: SupabaseClient, input: CreateExpenseInput) {
-  await assertWalletUsable(db, input.wallet_id, 'Dompet sumber');
-  await assertCategoryType(db, input.category_id, 'expense');
-  const { data, error } = await db.rpc('create_simple_transaction', {
+export async function createExpense(db: SupabaseClient, input: CreateExpenseInput, idempotencyKey: string) {
+  // Tanpa pre-check dompet/kategori di sini: alasan sama seperti createIncome.
+  // Payload ternormalisasi dipakai SAMA untuk hash dan argumen RPC.
+  const transactionDate = toIsoDate(input.transaction_date);
+  const notes = input.notes ?? null;
+  const requestHash = hashPayload({
+    type: 'expense',
+    wallet_id: input.wallet_id.toLowerCase(),
+    category_id: input.category_id.toLowerCase(),
+    amount: input.amount,
+    description: input.description,
+    transaction_date: transactionDate,
+    notes,
+  });
+  const { data, error } = await db.rpc('create_simple_transaction_idempotent', {
     p_type: 'expense',
     p_wallet_id: input.wallet_id,
     p_amount: input.amount,
     p_description: input.description,
     p_category_id: input.category_id,
-    p_transaction_date: toIsoDate(input.transaction_date),
-    p_notes: input.notes ?? null,
+    p_transaction_date: transactionDate,
+    p_notes: notes,
+    p_idempotency_key: idempotencyKey,
+    p_request_hash: requestHash,
   });
-  if (error) mapDbError(error);
+  if (error) mapWriteError(error);
   return data;
 }
 
-export async function createTransfer(db: SupabaseClient, input: CreateTransferInput) {
+export async function createTransfer(db: SupabaseClient, input: CreateTransferInput, idempotencyKey: string) {
   if (input.source_wallet_id === input.destination_wallet_id) {
     throw Errors.badRequest('Dompet asal dan tujuan tidak boleh sama');
   }
-  await assertWalletUsable(db, input.source_wallet_id, 'Dompet asal');
-  await assertWalletUsable(db, input.destination_wallet_id, 'Dompet tujuan');
+  // Tanpa pre-check dompet di sini: alasan sama seperti createIncome.
+  // Pemeriksaan dompet sama vs tujuan di atas dipertahankan (validasi input murni).
   // Wajib via DB function agar transfer atomik; jangan buat dua entries manual.
-  const { data, error } = await db.rpc('create_transfer', {
+  // Payload ternormalisasi dipakai SAMA untuk hash dan argumen RPC.
+  const transactionDate = toIsoDate(input.transaction_date);
+  const notes = input.notes ?? null;
+  const requestHash = hashPayload({
+    type: 'transfer',
+    source_wallet_id: input.source_wallet_id.toLowerCase(),
+    destination_wallet_id: input.destination_wallet_id.toLowerCase(),
+    amount: input.amount,
+    description: input.description,
+    transaction_date: transactionDate,
+    notes,
+  });
+  const { data, error } = await db.rpc('create_transfer_idempotent', {
     p_source_wallet_id: input.source_wallet_id,
     p_destination_wallet_id: input.destination_wallet_id,
     p_amount: input.amount,
     p_description: input.description,
-    p_transaction_date: toIsoDate(input.transaction_date),
-    p_notes: input.notes ?? null,
+    p_transaction_date: transactionDate,
+    p_notes: notes,
+    p_idempotency_key: idempotencyKey,
+    p_request_hash: requestHash,
   });
-  if (error) mapDbError(error);
+  if (error) mapWriteError(error);
   return data;
 }
