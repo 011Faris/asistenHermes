@@ -16,13 +16,26 @@ export const createWalletSchema = z.object({
   is_active: z.boolean().default(true),
 });
 
-export const updateWalletSchema = z.object({
-  name: z.string().trim().min(1).max(100).optional(),
-  wallet_type: walletTypeEnum.optional(),
-  provider: z.string().trim().max(100).nullable().optional(),
-  account_number: z.string().trim().max(50).nullable().optional(),
-  description: z.string().trim().max(500).nullable().optional(),
-});
+export const updateWalletSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    wallet_type: walletTypeEnum.optional(),
+    provider: z.string().trim().max(100).nullable().optional(),
+    account_number: z.string().trim().max(50).nullable().optional(),
+    description: z.string().trim().max(500).nullable().optional(),
+    initial_balance: z
+      .number()
+      .int('Saldo awal harus bilangan bulat')
+      .min(0, 'Saldo awal tidak boleh negatif')
+      .max(Number.MAX_SAFE_INTEGER, 'Saldo awal melebihi batas aman')
+      .optional(),
+  })
+  // Tolak field tak dikenal agar tidak terjadi sukses palsu (kasus initial_balance),
+  // dan tolak body kosong agar PATCH tanpa perubahan tidak lolos diam-diam.
+  .strict()
+  .refine((o) => Object.keys(o).length > 0, {
+    message: 'Body tidak boleh kosong; sertakan minimal satu field yang diubah',
+  });
 
 export const updateWalletStatusSchema = z.object({
   is_active: z.boolean(),

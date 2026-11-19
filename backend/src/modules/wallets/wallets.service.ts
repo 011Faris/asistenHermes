@@ -70,6 +70,23 @@ export async function createWallet(db: SupabaseClient, input: CreateWalletInput)
 
 export async function updateWallet(db: SupabaseClient, id: string, input: UpdateWalletInput) {
   await getWalletById(db, id);
+  if (input.initial_balance !== undefined) {
+    // Guard: saldo awal hanya boleh diubah bila dompet belum memiliki jurnal.
+    // Pengecekan dilakukan sedekat mungkin sebelum UPDATE untuk memperkecil
+    // jendela race; penegakan atomik penuh membutuhkan mekanisme di database
+    // (di luar batasan tahap ini) sehingga selalu ada celah kecil di antara
+    // pemeriksaan dan penulisan pada beban konkuren.
+    const { count, error: countError } = await db
+      .from('transaction_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('wallet_id', id);
+    if (countError) mapDbError(countError);
+    if ((count ?? 0) > 0) {
+      throw Errors.conflict(
+        'Dompet sudah memiliki jurnal transaksi sehingga initial_balance tidak dapat diubah melalui endpoint ini.',
+      );
+    }
+  }
   const patch: Record<string, unknown> = { ...input, updated_at: new Date().toISOString() };
   const { data, error } = await db.from('wallets').update(patch).eq('id', id).select('*').single();
   if (error) mapDbError(error);

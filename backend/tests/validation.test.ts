@@ -6,6 +6,7 @@ import {
 } from '../src/modules/transactions/transactions.validation.js';
 import { createWalletSchema } from '../src/modules/wallets/wallets.validation.js';
 import { createScheduleSchema } from '../src/modules/schedules/schedules.validation.js';
+import { updateWalletSchema } from '../src/modules/wallets/wallets.validation.js';
 import { createReminderSchema } from '../src/modules/reminders/reminders.validation.js';
 import { updateSettingsSchema } from '../src/modules/settings/settings.validation.js';
 
@@ -77,5 +78,44 @@ describe('validasi input (tanpa DB)', () => {
   it('jam briefing harus HH:MM', () => {
     expect(updateSettingsSchema.safeParse({ morning_briefing_time: '06:00' }).success).toBe(true);
     expect(updateSettingsSchema.safeParse({ morning_briefing_time: '6 pagi' }).success).toBe(false);
+  });
+});
+
+describe('validasi update initial_balance dompet (tanpa DB)', () => {
+  it('menerima initial_balance 1397799', () => {
+    const r = updateWalletSchema.safeParse({ initial_balance: 1397799 });
+    expect(r.success).toBe(true);
+  });
+
+  it('menerima initial_balance 0', () => {
+    expect(updateWalletSchema.safeParse({ initial_balance: 0 }).success).toBe(true);
+  });
+
+  it('menolak initial_balance negatif', () => {
+    expect(updateWalletSchema.safeParse({ initial_balance: -1 }).success).toBe(false);
+  });
+
+  it('menolak initial_balance desimal', () => {
+    expect(updateWalletSchema.safeParse({ initial_balance: 100.5 }).success).toBe(false);
+  });
+
+  it('menolak initial_balance melebihi Number.MAX_SAFE_INTEGER', () => {
+    expect(updateWalletSchema.safeParse({ initial_balance: Number.MAX_SAFE_INTEGER + 1 }).success).toBe(false);
+  });
+
+  it('menolak field tidak dikenal (anti sukses palsu)', () => {
+    const r = updateWalletSchema.safeParse({ initial_balance: 1000, foo: 'bar' });
+    expect(r.success).toBe(false);
+  });
+
+  it('menolak body kosong', () => {
+    expect(updateWalletSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('schema create wallet tetap berfungsi', () => {
+    expect(createWalletSchema.safeParse({ name: 'BRI', wallet_type: 'bank', initial_balance: 1397799 }).success).toBe(
+      true,
+    );
+    expect(createWalletSchema.safeParse({ name: 'BRI', wallet_type: 'bank', initial_balance: -1 }).success).toBe(false);
   });
 });

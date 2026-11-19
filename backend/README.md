@@ -79,7 +79,7 @@ Semua endpoint `/api/*` (kecuali `GET /api/health` dan `GET /`) wajib header `x-
 | GET | `/api/wallets/:id` | Detail dompet |
 | GET | `/api/wallets/:id/balance` | Saldo dari view `wallet_balances` |
 | POST | `/api/wallets` | Buat dompet (`initial_balance` ≥ 0) |
-| PATCH | `/api/wallets/:id` | Ubah dompet |
+| PATCH | `/api/wallets/:id` | Ubah dompet, termasuk `initial_balance` (≥ 0; ditolak 409 bila dompet sudah punya jurnal; field tak dikenal ditolak 400) |
 | PATCH | `/api/wallets/:id/status` | Aktif/nonaktif (`{ is_active }`) |
 | GET | `/api/categories?category_type=income\|expense` | Daftar kategori |
 | GET | `/api/categories/:id` | Detail |
