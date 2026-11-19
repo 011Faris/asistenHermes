@@ -7,6 +7,26 @@ function mapDbError(err: { message: string; code?: string }): never {
   throw Errors.upstream(`Database error: ${err.message}`, { code: err.code });
 }
 
+/**
+ * Kontrak API memakai `start_time`/`end_time`, kolom database aktual
+ * adalah `start_at`/`end_at`. Translasi DB -> API dan API -> DB
+ * dipusatkan pada dua fungsi ini (mengikuti pola toApiTransaction
+ * pada modul transactions).
+ */
+export function toDbSchedule(input: Record<string, unknown>): Record<string, unknown> {
+  const { start_time, end_time, ...rest } = input;
+  return {
+    ...rest,
+    ...(typeof start_time === 'string' ? { start_at: start_time } : {}),
+    ...(end_time === null || typeof end_time === 'string' ? { end_at: end_time } : {}),
+  };
+}
+
+export function toApiSchedule(row: Record<string, unknown>): Record<string, unknown> {
+  const { start_at, end_at, ...rest } = row;
+  return { ...rest, start_time: start_at ?? null, end_time: end_at ?? null };
+}
+
 function toJakartaDayRange(dateKey: string, timeZone: string): { start: string; end: string } {
   const ref = new Date(`${dateKey}T12:00:00+07:00`);
   const start = startOfDayInZone(ref, timeZone).toISOString();
@@ -15,7 +35,7 @@ function toJakartaDayRange(dateKey: string, timeZone: string): { start: string; 
 }
 
 export async function listSchedules(db: SupabaseClient, q: ListSchedulesQuery, timeZone: string) {
-  let query = db.from('schedules').select('*').order('start_time', { ascending: true }).limit(q.limit);
+  let query = db.from('schedules').select('*').order('start_at', { ascending: true }).limit(q.limit);
 
   if (q.status) query = query.eq('status', q.status);
 
@@ -24,34 +44,34 @@ export async function listSchedules(db: SupabaseClient, q: ListSchedulesQuery, t
 
   if (q.date) {
     const { start, end } = toJakartaDayRange(q.date, timeZone);
-    query = query.gte('start_time', start).lt('start_time', end);
+    query = query.gte('start_at', start).lt('start_at', end);
   } else if (isToday) {
     const now = new Date();
     const start = startOfDayInZone(now, timeZone).toISOString();
     const end = endOfDayExclusiveInZone(now, timeZone).toISOString();
-    query = query.gte('start_time', start).lt('start_time', end);
+    query = query.gte('start_at', start).lt('start_at', end);
   } else {
     if (q.start_date) {
       const { start } = toJakartaDayRange(q.start_date, timeZone);
-      query = query.gte('start_time', start);
+      query = query.gte('start_at', start);
     }
     if (q.end_date) {
       const { end } = toJakartaDayRange(q.end_date, timeZone);
-      query = query.lt('start_time', end);
+      query = query.lt('start_at', end);
     }
-    if (isUpcoming) query = query.gte('start_time', new Date().toISOString());
+    if (isUpcoming) query = query.gte('start_at', new Date().toISOString());
   }
 
   const { data, error } = await query;
   if (error) mapDbError(error);
-  return data ?? [];
+  return (data ?? []).map((row) => toApiSchedule(row as Record<string, unknown>));
 }
 
 export async function getScheduleById(db: SupabaseClient, id: string) {
   const { data, error } = await db.from('schedules').select('*').eq('id', id).maybeSingle();
   if (error) mapDbError(error);
   if (!data) throw Errors.notFound('Jadwal tidak ditemukan');
-  return data;
+  return toApiSchedule(data as Record<string, unknown>);
 }
 
 export async function createSchedule(db: SupabaseClient, input: CreateScheduleInput) {
@@ -60,23 +80,23 @@ export async function createSchedule(db: SupabaseClient, input: CreateScheduleIn
   }
   const { data, error } = await db
     .from('schedules')
-    .insert({ ...input, status: 'scheduled' })
+    .insert({ ...toDbSchedule(input), status: 'scheduled' })
     .select('*')
     .single();
   if (error) mapDbError(error);
-  return data;
+  return toApiSchedule(data as Record<string, unknown>);
 }
 
 export async function updateSchedule(db: SupabaseClient, id: string, input: UpdateScheduleInput) {
   await getScheduleById(db, id);
   const { data, error } = await db
     .from('schedules')
-    .update({ ...input, updated_at: new Date().toISOString() })
+    .update({ ...toDbSchedule(input), updated_at: new Date().toISOString() })
     .eq('id', id)
     .select('*')
     .single();
   if (error) mapDbError(error);
-  return data;
+  return toApiSchedule(data as Record<string, unknown>);
 }
 
 export async function setScheduleStatus(db: SupabaseClient, id: string, status: 'scheduled' | 'completed' | 'cancelled') {

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { Errors } from '../../utils/errors.js';
+import { toApiSchedule } from '../schedules/schedules.service.js';
 import { toApiTransaction } from '../transactions/transactions.service.js';
 import { currentMonthRangeInZone, endOfDayExclusiveInZone, startOfDayInZone } from '../../utils/timezone.js';
 
@@ -78,16 +79,16 @@ export async function getDashboardSummary(db: SupabaseClient, timeZone: string) 
   const { data: todaySchedules, error: todayError } = await db
     .from('schedules')
     .select('*')
-    .gte('start_time', dayStart)
-    .lt('start_time', dayEnd)
-    .order('start_time', { ascending: true });
+    .gte('start_at', dayStart)
+    .lt('start_at', dayEnd)
+    .order('start_at', { ascending: true });
   if (todayError) mapDbError(todayError);
   const { data: upcomingSchedules, error: upcomingError } = await db
     .from('schedules')
     .select('*')
-    .gte('start_time', dayEnd)
+    .gte('start_at', dayEnd)
     .eq('status', 'scheduled')
-    .order('start_time', { ascending: true })
+    .order('start_at', { ascending: true })
     .limit(10);
   if (upcomingError) mapDbError(upcomingError);
 
@@ -117,8 +118,8 @@ export async function getDashboardSummary(db: SupabaseClient, timeZone: string) 
       expense_count: expenseTx,
     },
     schedules: {
-      today: todaySchedules ?? [],
-      upcoming: upcomingSchedules ?? [],
+      today: ((todaySchedules ?? []) as Array<Record<string, unknown>>).map(toApiSchedule),
+      upcoming: ((upcomingSchedules ?? []) as Array<Record<string, unknown>>).map(toApiSchedule),
     },
     recent_transactions: ((recentTx ?? []) as Array<Record<string, unknown>>).map(toApiTransaction),
   };
